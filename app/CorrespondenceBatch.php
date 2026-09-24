@@ -1,0 +1,37 @@
+<?php
+namespace Srms;
+final class CorrespondenceBatch {
+ public static function parameters(array $d): array {
+  $type=require_value($d,'type');if(!in_array($type,['demand_notice','invitation'],true))throw new \DomainException('Choose demand notices or invitation letters.');
+  $year=(int)($d['year']??date('Y'));if($year<1900||$year>2200)throw new \DomainException('Invalid billing year.');
+  $numbers=preg_split('/[\s,;]+/',trim($d['accounts']??''),-1,PREG_SPLIT_NO_EMPTY);$numbers=array_values(array_unique(array_map([AccountNumber::class,'validate'],$numbers)));if(count($numbers)>500)throw new \DomainException('Use at most 500 properties per batch.');sort($numbers);
+  $p=['type'=>$type,'year'=>$year,'printed_date'=>valid_date($d['printed_date']??today()),'locality'=>mb_substr(trim($d['locality']??''),0,100),'accounts'=>$numbers,'include_unassigned'=>!empty($d['include_unassigned']),'period_from'=>null,'period_to'=>null];
+  if($type==='invitation'){$p['period_from']=valid_date(require_value($d,'period_from'));$p['period_to']=valid_date(require_value($d,'period_to'));if($p['period_from']>$p['period_to'])throw new \DomainException('Invitation end date must follow its start date.');}return $p;
+ }
+ public static function candidates(array $p): array {
+  Auth::staff();$params=[];$sql="SELECT p.account_number,p.locality,p.is_exempt,NULL bill_id FROM parcel_accounts p WHERE p.status='active'";
+  if($p['type']==='demand_notice'){$sql="SELECT p.account_number,p.locality,p.is_exempt,b.id bill_id FROM parcel_accounts p JOIN ground_rent_bills b ON b.account_number=p.account_number AND b.billing_year=? WHERE p.status='active' AND p.is_exempt=0 AND (SELECT COALESCE(SUM(x.principal_amount+x.penalty_amount+x.adjustment_amount-x.paid_amount),0) FROM ground_rent_bills x WHERE x.account_number=p.account_number AND x.billing_year<=?)>0";$params=[$p['year'],$p['year']];}
+  if(!$p['include_unassigned']){$sql.=" AND EXISTS(SELECT 1 FROM property_ratepayers o WHERE o.account_number=p.account_number AND o.relationship_type='owner' AND o.start_date<=? AND (o.end_date IS NULL OR o.end_date>?))";array_push($params,today(),today());}
+  if($p['locality']!==''){$sql.=" AND p.locality LIKE ? ESCAPE '!'";$params[]='%'.str_replace(['!','%','_'],['!!','!%','!_'],$p['locality']).'%';}
+  if($p['accounts']){$sql.=' AND p.account_number IN ('.implode(',',array_fill(0,count($p['accounts']),'?')).')';array_push($params,...$p['accounts']);}
+  return Database::all($sql.' ORDER BY p.account_number LIMIT 501',$params);
+ }
+ public static function create(array $d): string {
+  Auth::staff();$p=self::parameters($d);$key=require_value($d,'request_key');if(!preg_match('/^[a-f0-9-]{36}$/D',$key))throw new \DomainException('Invalid submission token.');$json=json_encode($p,JSON_THROW_ON_ERROR);
+  return Database::transaction(function()use($key,$p,$json){Database::lock('users',Auth::user()['id']);$old=Database::one('SELECT * FROM correspondence_batches WHERE request_key=?',[$key]);if($old){if($old['parameters_json']!==$json||$old['created_by']!==Auth::user()['id'])throw new \DomainException('Submission token already used.');return $old['id'];}$rows=self::candidates($p);if(!$rows)throw new \DomainException('No eligible properties match these filters.');if(count($rows)>500)throw new \DomainException('More than 500 properties match. Narrow the locality or enter up to 500 Account numbers.');$id=Database::insert('correspondence_batches',['request_key'=>$key,'correspondence_type'=>$p['type'],'parameters_json'=>$json,'created_by'=>Auth::user()['id']]);foreach($rows as $r)Database::insert('correspondence_batch_items',['batch_id'=>$id,'account_number'=>$r['account_number'],'bill_id'=>$r['bill_id']]);Audit::log('letter_batch_created','correspondence_batches',$id,null,['parameters'=>$p,'recipients'=>count($rows)]);return $id;});
+ }
+ public static function readAccess():void {if(!in_array(Auth::role(),['Administrator','Billing Officer','Read-Only Auditor'],true))throw new \DomainException('Staff correspondence access required.');}
+ public static function get(string $id): array {self::readAccess();return Database::one('SELECT * FROM correspondence_batches WHERE id=?',[$id])??throw new \DomainException('Letter batch not found.');}
+ public static function run(string $id): array {
+  Auth::staff();self::get($id);$rows=Database::all("SELECT id FROM correspondence_batch_items WHERE batch_id=? AND status IN ('pending','failed') ORDER BY account_number LIMIT 3",[$id]);
+  foreach($rows as $row){try{Database::transaction(function()use($id,$row){$b=Database::lock('correspondence_batches',$id);$item=Database::lock('correspondence_batch_items',$row['id']);if(!in_array($item['status'],['pending','failed'],true))return;$p=json_decode($b['parameters_json'],true,512,JSON_THROW_ON_ERROR);Database::lock('parcels',$item['account_number']);$check=$p;$check['accounts']=[$item['account_number']];if(!self::candidates($check)){Database::update('correspondence_batch_items',$item['id'],['status'=>'skipped','error_message'=>'Property no longer meets the batch eligibility filters.']);return;}$doc=Correspondence::generate($p+['account_number'=>$item['account_number'],'bill_id'=>$item['bill_id']]);Database::update('correspondence_batch_items',$item['id'],['correspondence_id'=>$doc,'status'=>'completed','error_message'=>null]);Audit::log('letter_batch_item_generated','correspondence_batch_items',$item['id'],null,['correspondence_id'=>$doc]);});}catch(\Throwable $e){Database::query("UPDATE correspondence_batch_items SET status='failed',error_message=? WHERE id=? AND status IN ('pending','failed')",['Generation failed. Review the application log and retry.',$row['id']]);error_log('Letter batch '.$id.' item '.$row['id'].': '.$e->getMessage());}}
+  return Database::transaction(function()use($id){Database::lock('correspondence_batches',$id);$counts=['pending'=>0,'completed'=>0,'skipped'=>0,'failed'=>0];foreach(Database::all('SELECT status,COUNT(*) n FROM correspondence_batch_items WHERE batch_id=? GROUP BY status',[$id]) as $r)$counts[$r['status']]=(int)$r['n'];$status=$counts['pending']?'processing':($counts['failed']?'needs_attention':'completed');Database::update('correspondence_batches',$id,['status'=>$status]);return $counts+['status'=>$status];});
+ }
+ public static function merged(string $id,string $key,string $action='download'): string {
+  return Database::transaction(function()use($id,$key,$action){
+  $batch=self::get($id);if($batch['status']!=='completed')throw new \DomainException('Finish or retry the batch before downloading.');
+  $rows=Database::all("SELECT i.correspondence_id FROM correspondence_batch_items i WHERE i.batch_id=? AND i.status='completed' ORDER BY i.account_number",[$id]);if(!$rows)throw new \DomainException('No letters were generated for this batch.');
+  $pdf=new \setasign\Fpdi\Fpdi();foreach($rows as $d){if(!$d['correspondence_id'])throw new \RuntimeException('Legacy batch record has no correspondence link. Original documents remain available in the library.');$out=CorrespondenceOutput::output($d['correspondence_id'],$action,$key);$count=$pdf->setSourceFile(\setasign\Fpdi\PdfParser\StreamReader::createByString($out['bytes']));for($n=1;$n<=$count;$n++){$template=$pdf->importPage($n);$size=$pdf->getTemplateSize($template);$pdf->AddPage($size['orientation'],[$size['width'],$size['height']]);$pdf->useTemplate($template);}}
+  Audit::log('letter_batch_'.$action,'correspondence_batches',$id,null,['documents'=>count($rows)]);return $pdf->Output('S');});
+ }
+}

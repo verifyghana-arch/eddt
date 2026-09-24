@@ -1,0 +1,20 @@
+'use strict';
+(() => {
+ const links=[...document.querySelectorAll('[data-gallery-photo]')];if(!links.length)return;
+ const dialog=document.createElement('dialog');dialog.className='property-photo-viewer';dialog.setAttribute('aria-label','Property photograph viewer');
+ const close=document.createElement('button');close.type='button';close.textContent='Close ×';close.className='button photo-viewer-close';
+ const image=document.createElement('img');image.alt='';const failure=document.createElement('p');failure.textContent='This photograph is unavailable.';failure.hidden=true;failure.setAttribute('role','status');
+ const caption=document.createElement('p');caption.className='photo-viewer-caption';caption.setAttribute('aria-live','polite');
+ const controls=document.createElement('div');controls.className='photo-controls';
+ const prev=document.createElement('button'),next=document.createElement('button'),counter=document.createElement('span');
+ prev.type=next.type='button';prev.textContent='← Previous';next.textContent='Next →';counter.setAttribute('aria-live','polite');
+ controls.append(prev,counter,next);dialog.append(close,image,failure,caption,controls);document.body.append(dialog);
+ let index=0,opener=null;
+ const show=()=>{const link=links[index];image.hidden=false;failure.hidden=true;image.alt=link.querySelector('img').alt;image.src=link.href;caption.textContent=link.closest('.photo-card').querySelector('.photo-card-body').innerText;counter.textContent=(index+1)+' / '+links.length;prev.disabled=index===0;next.disabled=index===links.length-1;controls.hidden=links.length===1;};
+ links.forEach((link,n)=>{link.setAttribute('aria-haspopup','dialog');link.addEventListener('click',event=>{event.preventDefault();index=n;opener=link;show();dialog.showModal();close.focus();});const thumb=link.querySelector('img');thumb.addEventListener('error',()=>{thumb.alt='Photograph unavailable — open viewer';link.classList.add('photo-unavailable');});});
+ image.addEventListener('error',()=>{image.hidden=true;failure.hidden=false;});
+ close.addEventListener('click',()=>dialog.close());prev.addEventListener('click',()=>{if(index>0){index--;show();}});next.addEventListener('click',()=>{if(index<links.length-1){index++;show();}});
+ dialog.addEventListener('keydown',event=>{if(event.key==='ArrowLeft'&&index>0){event.preventDefault();index--;show();}if(event.key==='ArrowRight'&&index<links.length-1){event.preventDefault();index++;show();}});
+ dialog.addEventListener('click',event=>{if(event.target===dialog){const rect=dialog.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)dialog.close();}});
+ dialog.addEventListener('close',()=>opener?.focus());
+})();

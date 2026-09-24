@@ -1,0 +1,1 @@
+<div class="error-card"><span class="error-symbol">!</span><h1><?=e($title)?></h1><p><?=e($message)?></p><p><a class="button primary" href="<?=e(url(\Srms\Auth::user()?'dashboard':'login'))?>">Return to workspace</a> <button class="button" type="button" data-back>Go back</button></p></div>

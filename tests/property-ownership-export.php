@@ -1,0 +1,15 @@
+<?php
+putenv('SRMS_DB_NAME=eddt_srms_rebuilt_test');putenv('SRMS_STORAGE_PATH=C:/xampp/htdocs/srms/var/rebuilt-test-storage');require dirname(__DIR__).'/app/bootstrap.php';
+use Srms\Database as DB;use Srms\Registry;use Srms\Finance;use Srms\PropertyContactReport as Report;use Srms\Auth;
+$n=0;function ok($v,$s){global $n;if(!$v)throw new RuntimeException($s);$n++;echo "PASS $s\n";}function loginAs($role){$u=DB::one('SELECT u.* FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name=? LIMIT 1',[$role]);$_SESSION=['user_id'=>$u['id'],'session_version'=>$u['session_version']];return $u;}
+DB::connection()->beginTransaction();try{
+loginAs('Administrator');$owner=Registry::save('ratepayers',['full_name'=>'Multiple property test owner','email'=>'multiple@example.test']);$year=(int)date('Y');
+foreach(['EDDT96001001','EDDT96001002'] as $account){Registry::save('parcels',['account_number'=>$account,'locality'=>'Test locality','plot_size'=>'1200','plot_size_unit'=>'sqm','address_line'=>'Test address']);Registry::ownership(['account_number'=>$account,'ratepayer_id'=>$owner,'start_date'=>today()]);}
+$rows=Report::rows(['q'=>'Multiple property test owner']);ok(count($rows)===2,'Same owner exported for two different properties');ok($rows[0]['owner_email']==='multiple@example.test'&&$rows[0]['address_line']==='Test address'&&Srms\Money::cmp($rows[0]['plot_size'],'1200')===0,'Requested contacts and property details exported');
+$account='EDDT96001001';foreach([$year-1=>'1200',$year=>'2400'] as $y=>$amount){$id=Finance::assessment(['account_number'=>$account,'assessment_year'=>$y,'annual_amount'=>$amount]);Finance::approve($id);Finance::issue($id,today());}
+Finance::assessment(['account_number'=>$account,'assessment_year'=>$year+1,'annual_amount'=>'5000']);Finance::payment(['account_number'=>$account,'amount'=>'200','payment_date'=>today(),'payment_method'=>'cash','request_key'=>uuid()]);
+$r=Report::rows(['q'=>$account])[0];ok($r['years_assessed']===($year-1).'; '.$year,'Approved assessment years only');ok($r['ground_rent_by_year_ghs']===($year-1).': 1200.0000; '.$year.': 2400.0000','Ground rent per year');ok($r['current_year_ground_rent_ghs']==='2400.0000','Current annual assessment');ok($r['arrears_ghs']==='1000.0000'&&$r['outstanding_ghs']==='3400.0000','Arrears exclude current year and subtract payments');ok(Report::rows(['q'=>'EDDT96001002'])[0]['years_assessed']==='','Unassessed property not given fictional assessment');
+foreach(['Billing Officer','Read-Only Auditor','Property Owner'] as $role){loginAs($role);$denied=false;try{Registry::ownership(['account_number'=>$account,'ratepayer_id'=>$owner,'start_date'=>today()]);}catch(DomainException $e){$denied=str_contains($e->getMessage(),'Administrator');}ok($denied,$role.' cannot assign owners');}
+$u=loginAs('Property Owner');DB::update('users',$u['id'],['ratepayer_id'=>$owner]);Auth::property('EDDT96001001');Auth::property('EDDT96001002');ok(true,'Owner can access both owned properties');
+echo "$n ownership and export checks passed.\n";
+}finally{DB::connection()->rollBack();}

@@ -1,0 +1,7 @@
+Options -Indexes
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^(?:app|config|database|docs|tests|tools|var|vendor|samples|simages)(?:/|$) - [F,L]
+RewriteRule ^(?:composer\.|plan\.md|README\.md|.*\.sql$|.*\.pdf$) - [F,L]
+RewriteRule ^$ public/index.php [L]
+</IfModule>

@@ -1,0 +1,7 @@
+<?php
+namespace Srms;
+final class LetterTemplates {
+ public const INVITATION="The East Dadekotopon Development Trust is by this letter inviting all lessees or occupants on Tse Addo, Opintin, and La Dadekotopon lands to come to the Trust to rectify, correct and update all land documents. This invitation is for the period {{period_from}} to {{period_to}}.\n\nThe Trust will be glad if all tenants, lessees, grantees and occupants take advantage of this period to have updated documents from the land-owning Stool/families and to receive guidance on annual ground rent. The updating process includes data collection, digitization and property imagery to provide credible records for the Land Secretariat, Office of the Administrator of Stool Lands, and Lands Commission.\n\nKindly come along with your land document (indenture) or a photocopy to the office located at {{address}}.\n\nPLEASE BRING THIS INVITATION OR A PHOTOGRAPH OR PHOTOCOPY OF IT. For enquiries, contact {{phone}} or {{email}} during office hours.";
+ public const WARNING='PLEASE NOTE: In accordance with the lease / licence agreement between the Trust / landowners and you, as contained in the lease document (indentures), non-payment of ground rents, whether the land is registered or not, constitutes a breach of contract and legal (court) action will be taken to recover the said rents.';
+ public static function render(string $template,array $values): string {foreach($values as $key=>$value)$template=str_replace('{{'.$key.'}}',(string)$value,$template);return $template;}
+}

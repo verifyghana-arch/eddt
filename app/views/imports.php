@@ -1,0 +1,22 @@
+<?php
+require_once __DIR__.'/ui.php';use Srms\Auth;use Srms\Imports;use Srms\Database;
+page_heading('Data imports','Validate first. Review conflicts. Approve and resume imports without duplicating records.');
+if(in_array(Auth::role(),['Administrator','Billing Officer'],true)):?>
+<section class="panel form-panel"><h2>Billing Roll GeoJSON</h2><p>Upload up to 10,000 polygon features / 15 MB. Each feature needs its permanent 12-character Account number. New parcels are created; matching existing parcels are skipped. Conflicting boundaries are reported and never overwritten. Owners and balances remain unassigned.</p>
+<?php form_start('billing-roll-upload',true);?><div class="field"><label for="billing-roll-file">Billing Roll file</label><input id="billing-roll-file" type="file" name="file" accept=".geojson,.json" required></div><?php submit('Validate Billing Roll');?></section>
+<section class="panel form-panel"><h2>Upload CSV or Excel</h2><p>Up to <?=e(\Srms\Settings::get('import_max_rows','5000'))?> rows / 10 MB. Import parcels and owners first, then opening balances against parcel Account numbers.</p><div class="actions">
+<?php foreach(Imports::TEMPLATES as $t=>$headers):?><a class="button small" href="<?=e(url('template',['type'=>$t]))?>">Download <?=e(ucwords(str_replace('_',' ',$t)))?> template</a><?php endforeach?></div>
+<?php form_start('import-upload',true);field('type','Record type','','select',true,array_combine(array_keys(Imports::TEMPLATES),array_map(fn($v)=>ucwords(str_replace('_',' ',$v)),array_keys(Imports::TEMPLATES))));field('file','CSV / XLSX file','','file',true);submit('Run validation');?></section>
+<?php endif?>
+<?php if($batch):
+$counts=array_column(Database::all('SELECT status,COUNT(*) total FROM import_rows WHERE batch_id=? GROUP BY status',[$batch['id']]),'total','status');
+$isRoll=$batch['entity_type']==='billing_roll';
+if($isRoll)foreach($rows as &$row){$source=json_decode($row['row_data_json'],true);$account=$source['source']['properties']['Account']??'';$row['source_account']=is_scalar($account)?(string)$account:'Invalid identifier';$row['planned_action']=str_replace('_',' ',$source['validated']['preview_action']??'Needs correction');}unset($row);
+?><section class="panel"><div class="panel-heading"><div><h2><?=e($batch['source_filename'])?></h2><p><?=e($batch['valid_rows'])?> valid · <?=e($batch['invalid_rows'])?> invalid · <?=e($batch['total_rows'])?> total</p><p><?=e($counts['imported']??0)?> created · <?=e($counts['skipped']??0)?> already linked / skipped</p></div><?=badge($batch['status'])?></div>
+<?php data_table($rows,$isRoll?['row_number'=>'Feature','source_account'=>'Account','planned_action'=>'Validation preview','status'=>'Status','validation_errors'=>'Conflict / error']:['row_number'=>'Row','status'=>'Status','validation_errors'=>'Validation errors','target_entity_id'=>'Imported record']);
+$page=max(1,(int)($_GET['page']??1));$pages=max(1,(int)ceil($batch['total_rows']/100));?>
+<div class="toolbar"><?php if($page>1):?><a class="button" href="<?=e(url('imports',['id'=>$batch['id'],'page'=>$page-1]))?>">Previous</a><?php endif?><span>Page <?=e($page)?> of <?=e($pages)?></span><?php if($page<$pages):?><a class="button" href="<?=e(url('imports',['id'=>$batch['id'],'page'=>$page+1]))?>">Next</a><?php endif?></div>
+<?php if(Auth::role()==='Administrator'&&!$batch['invalid_rows']&&$batch['status']!=='completed'):?><div class="form-panel"><p>Approval creates records in small transactions. Completed rows are preserved if processing stops. Back up the database before approval.</p>
+<form method="post" action="<?=e(url('import-commit'))?>" id="import-approval" data-run="<?=e(url('import-run'))?>"><?=csrf_field()?><?php hidden('id',$batch['id']);?><div class="actions"><button class="button primary" type="submit">Approve / continue next batch</button><button class="button" type="button" id="import-run">Approve and process remaining batches</button><button class="button" type="button" id="import-stop" hidden>Pause after current batch</button></div><p id="import-status" role="status" aria-live="polite"></p></form></div><?php endif?></section>
+<?php endif?><section class="panel"><div class="panel-heading"><h2>Import history</h2></div><?php foreach($batches as $b):?><a class="record-link" href="<?=e(url('imports',['id'=>$b['id']]))?>"><?=e($b['source_filename'])?><span><?=badge($b['status'])?> →</span></a><?php endforeach?><?php if(!$batches):data_table([]);endif?></section>
+<script defer src="<?=e(config('base_url'))?>/assets/imports.js"></script>

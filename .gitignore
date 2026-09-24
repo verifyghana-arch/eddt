@@ -1,0 +1,6 @@
+/config/local.php
+/var/
+/vendor/
+/composer.phar
+/composer-setup.php
+/tools/composer.phar

@@ -1,0 +1,9 @@
+{
+ "name":"eddt/srms",
+ "description":"EDDT Spatial Revenue Management System",
+ "type":"project",
+ "require":{"php":"^8.2","ext-pdo":"*","ext-bcmath":"*","ext-fileinfo":"*","dompdf/dompdf":"^3.1","chillerlan/php-qrcode":"^5.0","phpoffice/phpspreadsheet":"^5.0",
+  "setasign/fpdi": "^2.6",
+  "setasign/fpdf": "^1.9"},
+ "autoload":{"psr-4":{"Srms\\":"app/"}}
+}
